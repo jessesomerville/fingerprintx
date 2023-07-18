@@ -15,101 +15,40 @@
 package runner
 
 import (
-	"bufio"
-	"errors"
 	"fmt"
 	"net"
 	"net/netip"
-	"os"
 	"strconv"
-	"strings"
 
 	"github.com/praetorian-inc/fingerprintx/pkg/plugins"
 )
 
-var inputFile string
-
-func readTargets(inputFile string, verbose bool) ([]plugins.Target, error) {
-	targetsList := make([]plugins.Target, 0)
-	var readFile *os.File
-	if len(inputFile) == 0 && len(targetList) == 0 {
-		fi, _ := os.Stdin.Stat()
-		if (fi.Mode() & os.ModeCharDevice) != 0 { // if no piped input
-			return targetsList, errors.New("missing input of targets")
-		}
-		readFile = os.Stdin
-	} else if len(targetList) > 0 {
-		for _, target := range targetList {
-			parsedTarget, err := parseTarget(target)
-			if err == nil {
-				targetsList = append(targetsList, parsedTarget)
-			} else if verbose {
-				fmt.Printf("%s\n", err)
-			}
-		}
-	} else {
-		file, err := os.Open(inputFile)
-		if err != nil {
-			return targetsList, err
-		}
-		readFile = file
-	}
-	defer readFile.Close()
-
-	scanner := bufio.NewScanner(readFile)
-	for scanner.Scan() {
-		parsedTarget, err := parseTarget(scanner.Text())
-		if err == nil {
-			targetsList = append(targetsList, parsedTarget)
-		} else if verbose {
-			fmt.Printf("%s\n", err)
-		}
-	}
-	return targetsList, nil
-}
-
 func parseTarget(inputTarget string) (plugins.Target, error) {
-	scanTarget := plugins.Target{}
-	target := strings.Split(strings.TrimSpace(inputTarget), ":")
-	if len(target) != 2 {
-		return plugins.Target{}, fmt.Errorf("invalid target: %s", inputTarget)
+	var t plugins.Target
+
+	ap, err := netip.ParseAddrPort(inputTarget)
+	if err == nil {
+		t.Address = ap
+		return t, nil
 	}
 
-	hostStr, portStr := target[0], target[1]
-
-	port, err := strconv.ParseUint(portStr, 10, 16)
+	host, port, err := net.SplitHostPort(inputTarget)
 	if err != nil {
-		return plugins.Target{}, fmt.Errorf("invalid port specified")
+		return t, fmt.Errorf("invalid target %q: %v", inputTarget, err)
 	}
-
-	ip := net.ParseIP(hostStr)
-	var isHostname = false
-	if ip == nil {
-		var addrs []net.IP
-		addrs, err = net.LookupIP(hostStr)
-		if err != nil {
-			return plugins.Target{}, err
-		}
-		isHostname = true
-		ip = addrs[0]
+	port16, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		return t, fmt.Errorf("invalid port number %q: %v", port, err)
 	}
-
-	// use IPv4 representation if possible
-	ipv4 := ip.To4()
-	if ipv4 != nil {
-		ip = ipv4
+	addrs, err := net.LookupIP(host)
+	if err != nil {
+		return t, fmt.Errorf("failed to resolve IP target %q: %v", host, err)
 	}
-
-	addr, ok := netip.AddrFromSlice(ip)
+	ip, ok := netip.AddrFromSlice(addrs[0])
 	if !ok {
-		return plugins.Target{}, fmt.Errorf("invalid ip address specified %s", err)
+		return t, fmt.Errorf("invalid target %q", inputTarget)
 	}
-	targetAddr := netip.AddrPortFrom(addr, uint16(port))
-	scanTarget.Address = targetAddr
-
-	if isHostname {
-		scanTarget.Host = hostStr
-	}
-
-	return scanTarget, nil
+	t.Address = netip.AddrPortFrom(ip, uint16(port16))
+	t.Host = host
+	return t, nil
 }

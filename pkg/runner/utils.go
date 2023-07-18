@@ -17,56 +17,35 @@ package runner
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
-	"os/user"
-	"runtime"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/praetorian-inc/fingerprintx/pkg/plugins"
-	"github.com/praetorian-inc/fingerprintx/pkg/scan"
+	"golang.org/x/term"
 )
 
-func checkConfig(config cliConfig) error {
-	if len(config.outputFile) > 0 {
-		_, err := os.Stat(config.outputFile)
-		if !os.IsNotExist(err) && config.overwriteOutput {
-			fmt.Printf("File: %s already exists. Overwrite? [Y/N] ", config.outputFile)
-			fmt.Scan(&userInput)
-			if strings.ToLower(userInput)[0] != 'y' {
-				return fmt.Errorf("Output file %s already exists", config.outputFile)
-			}
+func checkOutputFile(path string) error {
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("failed to check output file %q: %v", path, err)
+	}
+
+	// Refrain from prompting for input in case stdin is connected to
+	// a pipe / non-tty file.
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Fprintf(os.Stderr, "File: %q already exists. Overwrite? (Y/n): ", path)
+		var input string
+		fmt.Scanln(&input)
+		input = strings.ToLower(strings.TrimSpace(input))
+		if input == "" || input == "y" || input == "yes" {
+			return nil
 		}
 	}
-	if config.outputJSON && config.outputCSV {
-		return errors.New("Only one output format can be specified (JSON or CSV)")
-	}
-
-	if config.useUDP && config.verbose {
-		user, err := user.Current()
-		if err != nil {
-			return fmt.Errorf("Failed to retrieve current user (error: %w)", err)
-		}
-		if !((runtime.GOOS == "linux" || runtime.GOOS == "darwin") && user.Uid == "0") {
-			fmt.Fprintln(os.Stderr, "Note: UDP Scan may require root privileges")
-		}
-	}
-
-	if config.showErrors && !(config.outputJSON || config.outputCSV) {
-		return errors.New("showErrors requires results being output in JSON or CSV format")
-	}
-
-	return nil
-}
-
-func createScanConfig(config cliConfig) scan.Config {
-	return scan.Config{
-		DefaultTimeout: time.Duration(config.timeout) * time.Millisecond,
-		FastMode:       config.fastMode,
-		UDP:            config.useUDP,
-		Verbose:        config.verbose,
-	}
+	return fmt.Errorf("output file %q already exists", path)
 }
 
 func isPriorityPort(port int) bool {

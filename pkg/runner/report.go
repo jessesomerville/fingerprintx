@@ -17,79 +17,82 @@ package runner
 import (
 	"encoding/csv"
 	"encoding/json"
-	"log"
+	"fmt"
+	"io"
 	"os"
 	"strconv"
-	"strings"
 
 	"github.com/praetorian-inc/fingerprintx/pkg/plugins"
 )
 
-type outputFormat string
+type formatter interface {
+	WriteService(plugins.Service) error
+}
 
-const (
-	JSON    outputFormat = "JSON"
-	CSV     outputFormat = "CSV"
-	DEFAULT outputFormat = "DEFAULT"
-)
+type jsonFormatter struct {
+	*json.Encoder
+}
 
-func Report(services []plugins.Service) error {
-	var writeFile *os.File
-	var outputFormat = DEFAULT
-	var csvWriter *csv.Writer
-	var err error
+func (j *jsonFormatter) WriteService(svc plugins.Service) error {
+	return j.Encode(svc)
+}
 
-	log.SetFlags(0)
+type csvFormatter struct {
+	*csv.Writer
+}
 
-	if len(config.outputFile) > 0 {
-		var fileErr error
-		writeFile, fileErr = os.Create(config.outputFile)
-		if fileErr != nil {
-			return fileErr
-		}
-		log.SetOutput(writeFile)
-	} else {
-		log.SetOutput(os.Stdout)
+func (c *csvFormatter) WriteService(svc plugins.Service) error {
+	row := []string{
+		svc.Host,
+		svc.IP,
+		strconv.Itoa(svc.Port),
+		svc.Protocol,
+		strconv.FormatBool(svc.TLS),
+		string(svc.Raw),
 	}
-	defer writeFile.Close()
+	return c.Write(row)
+}
 
-	if config.outputJSON {
-		outputFormat = JSON
-	} else if config.outputCSV {
-		outputFormat = CSV
-		csvWriter = csv.NewWriter(writeFile)
-		if config.showErrors {
-			err = csvWriter.Write([]string{"Host", "Port", "Service", "Metadata", "Error"})
-		} else {
-			err = csvWriter.Write([]string{"Host", "Port", "Service", "Data"})
-		}
+type textFormatter struct {
+	w io.Writer
+}
+
+func (t *textFormatter) WriteService(svc plugins.Service) error {
+	fmt.Fprintln(t.w, svc)
+	return nil
+}
+
+func report(services []plugins.Service) error {
+	var out *os.File
+	if rootCmd.outputFile != "" {
+		f, err := os.Create(rootCmd.outputFile)
 		if err != nil {
 			return err
 		}
+		out = f
+		defer f.Close()
+	} else {
+		out = os.Stdout
+	}
+
+	var w formatter
+	switch {
+	case rootCmd.outputJSON:
+		w = &jsonFormatter{json.NewEncoder(out)}
+	case rootCmd.outputCSV:
+		cw := &csvFormatter{csv.NewWriter(out)}
+		if err := cw.Write([]string{"Host", "IP", "Port", "Protocol", "TLS", "Data"}); err != nil {
+			return err
+		}
+		defer cw.Flush()
+		w = cw
+	default:
+		w = &textFormatter{w: out}
 	}
 
 	for _, service := range services {
-		switch outputFormat {
-		case JSON:
-			data, jerr := json.Marshal(service)
-			if jerr != nil {
-				return err
-			}
-			log.Println(string(data))
-		case CSV:
-			portStr := strconv.FormatInt(int64(service.Port), 10)
-			err = csvWriter.Write([]string{service.Host, service.IP, portStr, service.Protocol,
-				strconv.FormatBool(service.TLS), string(service.Raw)})
-			if err != nil {
-				return err
-			}
-			csvWriter.Flush()
-		default:
-			if len(service.Host) > 0 {
-				log.Printf("%s://%s:%d (%s)\n", strings.ToLower(service.Protocol), service.Host, service.Port, service.IP)
-			} else {
-				log.Printf("%s://%s:%d\n", strings.ToLower(service.Protocol), service.IP, service.Port)
-			}
+		if err := w.WriteService(service); err != nil {
+			return err
 		}
 	}
 	return nil

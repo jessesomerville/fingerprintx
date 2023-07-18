@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -213,6 +214,15 @@ func (e Service) Metadata() Metadata {
 		_ = json.Unmarshal(e.Raw, &p)
 		return p
 	}
+}
+
+func (e Service) String() string {
+	s := strings.ToLower(e.Protocol) + "://"
+	if e.Host != "" {
+		s += net.JoinHostPort(e.Host, strconv.Itoa(e.Port))
+		return s + "(" + e.IP + ")"
+	}
+	return s + net.JoinHostPort(e.IP, strconv.Itoa(e.Port))
 }
 
 type ServiceUnknown map[string]any

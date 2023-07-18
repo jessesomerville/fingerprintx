@@ -15,65 +15,43 @@
 package runner
 
 import (
-	"fmt"
 	"os"
 
-	"github.com/praetorian-inc/fingerprintx/pkg/scan"
 	"github.com/spf13/cobra"
 )
 
-var (
-	config     cliConfig
-	targetList []string
-	userInput  string
-	rootCmd    = &cobra.Command{
-		Use: "fingerprintx [flags]\nTARGET SPECIFICATION:\n\tRequires a host and port number or ip and port number. " +
-			"The port is assumed to be open.\n\tHOST:PORT or IP:PORT\nEXAMPLES:\n\tfingerprintx -t praetorian.com:80\n" +
-			"\tfingerprintx -l input-file.txt\n\tfingerprintx --json -t praetorian.com:80,127.0.0.1:8000",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			configErr := checkConfig(config)
-			if configErr != nil {
-				return configErr
-			}
-
-			targetsList, err := readTargets(inputFile, config.verbose)
-			if err != nil {
-				return err
-			}
-
-			results, err := scan.ScanTargets(targetsList, createScanConfig(config))
-			if err != nil {
-				return fmt.Errorf("Failed running ScanTargets (%w)", err)
-			}
-
-			err = Report(results)
-			if err != nil {
-				return fmt.Errorf("Failed reporting results (%w)", err)
-			}
-
-			return nil
-		},
-	}
-)
+var rootCmd = new(cli)
 
 func init() {
-	rootCmd.CompletionOptions.DisableDefaultCmd = true
-	rootCmd.SetHelpCommand(&cobra.Command{Hidden: true})
+	rootCmd.Command = &cobra.Command{
+		Use:               "fingerprintx",
+		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
+		PreRunE:           rootCmd.initScanConfig,
+		RunE:              rootCmd.scanTargets,
+		Long: `
+TARGET SPECIFICATION:
+	Requires a host and port number or ip and port number. The port is assumed to be open.
+	HOST:PORT or IP:PORT`,
+		Example: `
+  fingerprintx -t praetorian.com:80
+  fingerprintx -l input-file.txt
+  fingerprintx --json -t praetorian.com:80,127.0.0.1:8000`,
+	}
 
-	rootCmd.PersistentFlags().StringVarP(&inputFile, "list", "l", "", "input file containing targets")
-	rootCmd.PersistentFlags().StringSliceVarP(&targetList, "targets", "t", nil, "target or comma separated target list")
-	rootCmd.PersistentFlags().StringVarP(&config.outputFile, "output", "o", "", "output file")
-	rootCmd.PersistentFlags().
-		BoolVarP(&config.outputJSON, "json", "", false, "output format in json")
-	rootCmd.PersistentFlags().BoolVarP(&config.outputCSV, "csv", "", false, "output format in csv")
+	rootCmd.Flags().StringVarP(&rootCmd.inputFile, "list", "l", "", "input file containing targets")
+	rootCmd.Flags().StringSliceVarP(&rootCmd.targets, "targets", "t", nil, "target or comma separated target list")
 
-	rootCmd.PersistentFlags().BoolVarP(&config.fastMode, "fast", "f", false, "fast mode")
-	rootCmd.PersistentFlags().
-		BoolVarP(&config.useUDP, "udp", "U", false, "run UDP plugins")
+	rootCmd.Flags().BoolVarP(&rootCmd.scancfg.FastMode, "fast", "f", false, "fast mode")
+	rootCmd.Flags().BoolVarP(&rootCmd.scancfg.UDP, "udp", "U", false, "run UDP plugins")
+	rootCmd.Flags().BoolVarP(&rootCmd.scancfg.Verbose, "verbose", "v", false, "verbose mode")
+	rootCmd.Flags().IntVarP(&rootCmd.timeout, "timeout", "w", 2000, "timeout (milliseconds)")
 
-	rootCmd.PersistentFlags().BoolVarP(&config.verbose, "verbose", "v", false, "verbose mode")
-	rootCmd.PersistentFlags().
-		IntVarP(&config.timeout, "timeout", "w", 2000, "timeout (milliseconds)")
+	rootCmd.Flags().StringVarP(&rootCmd.outputFile, "output", "o", "", "output file")
+	rootCmd.Flags().BoolVarP(&rootCmd.outputJSON, "json", "", false, "output format in json")
+	rootCmd.Flags().BoolVarP(&rootCmd.outputCSV, "csv", "", false, "output format in csv")
+
+	rootCmd.MarkFlagsMutuallyExclusive("json", "csv")
+	rootCmd.MarkFlagsMutuallyExclusive("targets", "list")
 }
 
 func Execute() {
